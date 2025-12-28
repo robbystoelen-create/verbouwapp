@@ -59,4 +59,4 @@ if uploaded_file is not None:
     
     if st.button("Opslaan"):
         st.success(f"€{gekozen_totaal} is verwerkt!")
-        
+
