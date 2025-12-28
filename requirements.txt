@@ -2,5 +2,4 @@ streamlit
 easyocr
 numpy
 Pillow
-pdf2image
 pdfplumber
