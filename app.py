@@ -3,60 +3,69 @@ import easyocr
 import numpy as np
 from PIL import Image
 import re
+import pandas as pd # Nieuw: voor de tabel
 
-st.set_page_config(page_title="Verbouw Scanner PRO", page_icon="🏗️")
-st.title("🏗️ Robby's Verbouw Scanner")
+st.set_page_config(page_title="Bouw-Dashboard", layout="wide")
 
-# AI Laden met Cache (zodat het sneller gaat)
+# Gebruik tabs voor een schoon overzicht
+tab1, tab2 = st.tabs(["📸 Scanner", "📊 Overzicht & Historie"])
+
 @st.cache_resource
 def load_reader():
     return easyocr.Reader(['nl', 'en'])
 
 reader = load_reader()
 
-uploaded_file = st.camera_input("Scan een factuur of bonnetje")
+# Initialiseer een 'database' in het geheugen van de app
+if 'uitgaven_lijst' not in st.session_state:
+    st.session_state.uitgaven_lijst = []
 
-if uploaded_file:
-    img = Image.open(uploaded_file)
-    st.image(img, caption="Gescande foto", use_container_width=True)
-    
-    with st.spinner('De AI analyseert de tekst...'):
-        # Omzetten naar tekst
+with tab1:
+    st.title("Factuur Scannen")
+    uploaded_file = st.camera_input("Maak een foto")
+
+    if uploaded_file:
+        img = Image.open(uploaded_file)
         img_np = np.array(img)
         result = reader.readtext(img_np, detail=0)
         tekst = " ".join(result).lower()
 
-        # Laat zien wat de AI ziet (voor troubleshooting)
-        with st.expander("Bekijk wat de AI heeft gelezen"):
-            st.write(tekst)
-
-        # Zoek bedragen (zoekt naar patronen als 10,50 of 1.250,99)
-        # We zoeken naar getallen met 2 decimalen achter een komma of punt
+        # Slimme bedrag herkenning
         bedrag_patroon = r'\d+[.,]\d{2}'
-        gevonden_bedragen = re.findall(bedrag_patroon, tekst)
-        
-        # Bedragen omzetten naar bruikbare getallen
-        getallen = []
-        for b in gevonden_bedragen:
-            # Haal punten weg (duizendtallen) en vervang komma door punt
-            schoon = b.replace('.', '').replace(',', '.')
-            getallen.append(float(schoon))
-
+        gevonden = re.findall(bedrag_patroon, tekst)
+        getallen = [float(b.replace('.', '').replace(',', '.')) for b in gevonden]
         totaal = max(getallen) if getallen else 0.0
 
-        # Categorie bepalen op basis van trefwoorden
+        # Categorie logic
         cat = "OVERIG"
-        if any(w in tekst for w in ["elektra", "kabel", "watt", "niko", "lamp"]): cat = "ELEKTRICITEIT"
-        elif any(w in tekst for w in ["water", "kraan", "pvc", "sanitair", "buis"]): cat = "TECHNIEKEN"
-        elif any(w in tekst for w in ["gamma", "praxis", "hout", "verf", "schroef"]): cat = "MATERIALen"
+        if any(w in tekst for w in ["elektra", "kabel", "watt", "niko"]): cat = "ELEKTRICITEIT"
+        elif any(w in tekst for w in ["water", "kraan", "pvc", "sanitair"]): cat = "TECHNIEKEN"
+        elif any(w in tekst for w in ["gamma", "praxis", "hout", "verf"]): cat = "MATERIALEN"
 
-    st.divider()
-    st.subheader(f"Gevonden Totaalbedrag: € {totaal:.2f}")
-    st.info(f"Voorgestelde categorie: **{cat}**")
+        st.subheader(f"Gevonden: € {totaal:.2f}")
+        gekozen_cat = st.selectbox("Controleer categorie:", ["MATERIALEN", "TECHNIEKEN", "ELEKTRICITEIT", "OVERIG"], index=["MATERIALEN", "TECHNIEKEN", "ELEKTRICITEIT", "OVERIG"].index(cat))
 
-    if st.button("Sla deze uitgave op"):
-        # Op Streamlit Cloud wordt dit tijdelijk opgeslagen
-        with open("uitgaven_log.txt", "a") as f:
-            f.write(f"{cat};{totaal:.2f}\n")
-        st.balloons()
-        st.success("Opgeslagen!")
+        if st.button("Bevestigen en Opslaan"):
+            st.session_state.uitgaven_lijst.append({"Categorie": gekozen_cat, "Bedrag": totaal})
+            st.success("Opgeslagen in tijdelijk overzicht!")
+            st.balloons()
+
+with tab2:
+    st.title("Jouw Verbouw Budget")
+    
+    if st.session_state.uitgaven_lijst:
+        df = pd.DataFrame(st.session_state.uitgaven_lijst)
+        
+        # Laat de tabel zien
+        st.write("### Alle Uitgaven")
+        st.dataframe(df, use_container_width=True)
+
+        # Bereken totalen per categorie
+        st.write("### Totaal per Categorie")
+        overzicht = df.groupby("Categorie")["Bedrag"].sum().reset_index()
+        st.bar_chart(data=overzicht, x="Categorie", y="Bedrag")
+        
+        totaal_bouw = df["Bedrag"].sum()
+        st.metric("Totaal Uitgegeven", f"€ {totaal_bouw:.2f}")
+    else:
+        st.info("Nog geen uitgaven gescand.")
