@@ -2,71 +2,91 @@ import streamlit as st
 import pdfplumber
 import re
 import pandas as pd
+import numpy as np
+from PIL import Image
 
-st.set_page_config(page_title="Robby's Multi-Scanner", layout="wide")
-st.title("🏗️ Robby's Factuur & PDF Scanner")
+st.set_page_config(page_title="Robby's Bouw App", layout="wide")
 
-# Upload sectie
-uploaded_file = st.file_uploader("Upload je factuur (PDF of Foto)", type=['pdf', 'png', 'jpg', 'jpeg'])
+# Initialiseer de database in het geheugen
+if 'uitgaven_lijst' not in st.session_state:
+    st.session_state.uitgaven_lijst = []
 
-if uploaded_file is not None:
-    tekst = ""
+# Maak de mappen (Tabs) weer aan
+tab1, tab2 = st.tabs(["📸 Scanner", "📊 Overzicht"])
+
+with tab1:
+    st.title("Scanner")
+    uploaded_file = st.file_uploader("Upload PDF of Foto", type=['pdf', 'png', 'jpg', 'jpeg'])
     
-    # PDF verwerking (vlijmscherp voor digitale facturen)
-    if uploaded_file.type == "application/pdf":
-        with pdfplumber.open(uploaded_file) as pdf:
-            for page in pdf.pages:
-                tekst += page.extract_text() or ""
-    else:
-        # Foto verwerking via EasyOCR (zoals we eerder deden)
-        import easyocr
-        import numpy as np
-        from PIL import Image
-        reader = easyocr.Reader(['nl'])
-        img = Image.open(uploaded_file)
-        result = reader.readtext(np.array(img), detail=0)
-        tekst = " ".join(result)
+    # Camera als backup
+    if not uploaded_file:
+        uploaded_file = st.camera_input("Of maak een foto")
 
-    tekst = tekst.lower()
+    if uploaded_file is not None:
+        tekst = ""
+        # PDF tekst eruit halen
+        if uploaded_file.type == "application/pdf":
+            with pdfplumber.open(uploaded_file) as pdf:
+                for page in pdf.pages:
+                    tekst += page.extract_text() or ""
+        else:
+            # Foto tekst eruit halen (hiervoor moet easyocr in je requirements staan)
+            import easyocr
+            reader = easyocr.Reader(['nl'])
+            img = Image.open(uploaded_file)
+            result = reader.readtext(np.array(img), detail=0)
+            tekst = " ".join(result)
 
-    # --- SLIMMERE ZOEKLOGICA VOOR MEERDERE BEDRAGEN ---
-    # We zoeken naar alles wat op een bedrag lijkt: getallen met een komma en 2 decimalen
-    bedrag_patroon = r'\d+[.,]\d{2}'
-    gevonden_tekst_bedragen = re.findall(bedrag_patroon, tekst)
-    
-    # Omzetten naar echte getallen en uniek maken (tegen dubbelingen)
-    unieke_bedragen = []
-    for b in gevonden_tekst_bedragen:
-        getal = float(b.replace('.', '').replace(',', '.'))
-        if getal > 1.0 and getal not in unieke_bedragen: # Filter heel kleine bedragen en dubbelen
-            unieke_bedragen.append(getal)
+        tekst = tekst.lower()
 
-    st.divider()
-    
-    if unieke_bedragen:
-        st.subheader("Gevonden bedragen op de factuur:")
-        st.write("De AI heeft de volgende bedragen herkend. Selecteer de juiste:")
+        # Zoek alle mogelijke bedragen (getal met , of . en 2 decimalen)
+        bedrag_patroon = r'\d+[.,]\d{2}'
+        gevonden = re.findall(bedrag_patroon, tekst)
         
-        # Laat de gebruiker de bedragen kiezen die hij wil opslaan
-        geselecteerde_bedragen = st.multiselect("Welke bedragen wil je opslaan?", 
-                                                options=sorted(unieke_bedragen, reverse=True),
-                                                default=[max(unieke_bedragen)])
+        # Maak getallen schoon en uniek
+        unieke_bedragen = []
+        for b in gevonden:
+            g = float(b.replace('.', '').replace(',', '.'))
+            if g > 1.0 and g not in unieke_bedragen and not (2020 <= g <= 2030):
+                unieke_bedragen.append(g)
+
+        if unieke_bedragen:
+            st.write("### Kies de juiste bedragen:")
+            geselecteerd = st.multiselect("Welke bedragen horen bij de factuur?", 
+                                          options=sorted(unieke_bedragen, reverse=True),
+                                          default=[max(unieke_bedragen)])
+            
+            cat = st.selectbox("Categorie:", ["MATERIALEN", "TECHNIEKEN", "ELEKTRICITEIT", "OVERIG"])
+            
+            if st.button("Sla deze uitgaven op"):
+                for b in geselecteerd:
+                    st.session_state.uitgaven_lijst.append({"Categorie": cat, "Bedrag": b})
+                st.success(f"Opgeslagen in Overzicht!")
+                st.balloons()
+        else:
+            st.warning("Geen bedrag herkend.")
+            handmatig = st.number_input("Handmatig bedrag:", value=0.0)
+            if st.button("Handmatig opslaan"):
+                st.session_state.uitgaven_lijst.append({"Categorie": "OVERIG", "Bedrag": handmatig})
+
+with tab2:
+    st.title("Totaal Overzicht")
+    
+    if st.session_state.uitgaven_lijst:
+        df = pd.DataFrame(st.session_state.uitgaven_lijst)
         
-        # Categorie toevoegen
-        categorie = st.selectbox("Categorie voor deze uitgave(n):", ["MATERIALEN", "TECHNIEKEN", "ELEKTRICITEIT", "OVERIG"])
-
-        if st.button("Sla geselecteerde bedragen op"):
-            # Hier kun je de logica toevoegen om het naar een lijst te schrijven
-            for bedrag in geselecteerde_bedragen:
-                st.write(f"✅ Opgeslagen: €{bedrag:.2f} in categorie {categorie}")
-            st.balloons()
+        # Tabel laten zien
+        st.dataframe(df, use_container_width=True)
+        
+        # Totaal berekenen
+        totaal_generaal = df["Bedrag"].sum()
+        st.metric("Totaal Uitgegeven", f"€ {totaal_generaal:.2f}")
+        
+        # Grafiekje
+        st.bar_chart(df.groupby("Categorie")["Bedrag"].sum())
+        
+        # Download knop voor Excel (CSV)
+        csv = df.to_csv(index=False).encode('utf-8')
+        st.download_button("Download lijst voor Excel", data=csv, file_name="verbouw_kosten.csv", mime="text/csv")
     else:
-        st.warning("Geen bedragen gevonden. Probeer een duidelijkere scan of typ het bedrag handmatig.")
-        handmatig = st.number_input("Handmatig bedrag invoeren:", value=0.0)
-        if st.button("Handmatig opslaan"):
-            st.success(f"€{handmatig} opgeslagen!")
-
-    # Voor debug: wat ziet de AI?
-    with st.expander("Bekijk de volledige tekst uit de PDF/Foto"):
-        st.text(tekst)
-
+        st.info("De lijst is nog leeg. Scan eerst een factuur.")
