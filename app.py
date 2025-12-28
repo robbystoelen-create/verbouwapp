@@ -3,12 +3,10 @@ import easyocr
 import numpy as np
 from PIL import Image
 import re
-import pandas as pd # Nieuw: voor de tabel
+import pdfplumber # Voor het direct lezen van tekst uit PDF
 
-st.set_page_config(page_title="Bouw-Dashboard", layout="wide")
-
-# Gebruik tabs voor een schoon overzicht
-tab1, tab2 = st.tabs(["📸 Scanner", "📊 Overzicht & Historie"])
+st.set_page_config(page_title="Bouw Scanner PDF & Foto", page_icon="🏗️")
+st.title("🏗️ Robby's Factuur Scanner")
 
 @st.cache_resource
 def load_reader():
@@ -16,56 +14,49 @@ def load_reader():
 
 reader = load_reader()
 
-# Initialiseer een 'database' in het geheugen van de app
-if 'uitgaven_lijst' not in st.session_state:
-    st.session_state.uitgaven_lijst = []
+# Aangepaste knop: accepteert nu afbeeldingen EN PDF
+uploaded_file = st.file_uploader("Upload een factuur (PDF of Foto)", type=['pdf', 'png', 'jpg', 'jpeg'])
 
-with tab1:
-    st.title("Factuur Scannen")
-    uploaded_file = st.camera_input("Maak een foto")
+# Als er geen bestand is geüpload, tonen we de camera optie als alternatief
+if not uploaded_file:
+    uploaded_file = st.camera_input("Of maak direct een foto")
 
-    if uploaded_file:
+if uploaded_file is not None:
+    tekst = ""
+    
+    # CHECK: Is het een PDF?
+    if uploaded_file.type == "application/pdf":
+        with pdfplumber.open(uploaded_file) as pdf:
+            # Lees de tekst van alle pagina's
+            for page in pdf.pages:
+                tekst += page.extract_text() or ""
+    
+    # Anders is het een foto
+    else:
         img = Image.open(uploaded_file)
         img_np = np.array(img)
         result = reader.readtext(img_np, detail=0)
-        tekst = " ".join(result).lower()
+        tekst = " ".join(result)
 
-        # Slimme bedrag herkenning
-        bedrag_patroon = r'\d+[.,]\d{2}'
-        gevonden = re.findall(bedrag_patroon, tekst)
-        getallen = [float(b.replace('.', '').replace(',', '.')) for b in gevonden]
-        totaal = max(getallen) if getallen else 0.0
+    tekst = tekst.lower()
 
-        # Categorie logic
-        cat = "OVERIG"
-        if any(w in tekst for w in ["elektra", "kabel", "watt", "niko"]): cat = "ELEKTRICITEIT"
-        elif any(w in tekst for w in ["water", "kraan", "pvc", "sanitair"]): cat = "TECHNIEKEN"
-        elif any(w in tekst for w in ["gamma", "praxis", "hout", "verf"]): cat = "MATERIALEN"
+    # --- DEZELFDE SLIMME ZOEKLOGICA ---
+    with st.expander("Bekijk gevonden tekst"):
+        st.write(tekst)
 
-        st.subheader(f"Gevonden: € {totaal:.2f}")
-        gekozen_cat = st.selectbox("Controleer categorie:", ["MATERIALEN", "TECHNIEKEN", "ELEKTRICITEIT", "OVERIG"], index=["MATERIALEN", "TECHNIEKEN", "ELEKTRICITEIT", "OVERIG"].index(cat))
-
-        if st.button("Bevestigen en Opslaan"):
-            st.session_state.uitgaven_lijst.append({"Categorie": gekozen_cat, "Bedrag": totaal})
-            st.success("Opgeslagen in tijdelijk overzicht!")
-            st.balloons()
-
-with tab2:
-    st.title("Jouw Verbouw Budget")
+    bedrag_patroon = r'\d+[.,]\d{2}'
+    gevonden = re.findall(bedrag_patroon, tekst)
+    getallen = [float(b.replace('.', '').replace(',', '.')) for b in gevonden]
     
-    if st.session_state.uitgaven_lijst:
-        df = pd.DataFrame(st.session_state.uitgaven_lijst)
-        
-        # Laat de tabel zien
-        st.write("### Alle Uitgaven")
-        st.dataframe(df, use_container_width=True)
+    # Filter jaartallen en kies laatste bedrag (vaak het totaal)
+    getallen = [g for g in getallen if not (2020 <= g <= 2030)]
+    totaal = getallen[-1] if getallen else 0.0
 
-        # Bereken totalen per categorie
-        st.write("### Totaal per Categorie")
-        overzicht = df.groupby("Categorie")["Bedrag"].sum().reset_index()
-        st.bar_chart(data=overzicht, x="Categorie", y="Bedrag")
+    st.divider()
+    st.subheader(f"Gevonden bedrag: € {totaal:.2f}")
+    
+    gekozen_totaal = st.number_input("Klop het bedrag?", value=totaal)
+    
+    if st.button("Opslaan"):
+        st.success(f"€{gekozen_totaal} is verwerkt!")
         
-        totaal_bouw = df["Bedrag"].sum()
-        st.metric("Totaal Uitgegeven", f"€ {totaal_bouw:.2f}")
-    else:
-        st.info("Nog geen uitgaven gescand.")
